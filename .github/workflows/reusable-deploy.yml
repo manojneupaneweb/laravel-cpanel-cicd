@@ -151,7 +151,7 @@ jobs:
       PHP_BINARY: ${{ inputs.php_binary }}
       GIT_BRANCH: ${{ inputs.production_branch }}
       DEPLOY_PATH: ${{ inputs.deployment_path }}
-      SSH_PORT: ${{ inputs.ssh_port }}
+      DEPLOY_SSH_PORT: ${{ inputs.ssh_port }}
       COMPOSER_PATH: ${{ inputs.composer_path }}
       COMPOSER_MODE: ${{ inputs.composer_mode }}
       COMPOSER_FLAGS: ${{ inputs.composer_flags }}
@@ -185,7 +185,14 @@ jobs:
           [[ "$DEPLOY_PATH" =~ ^/[-A-Za-z0-9._@/+]+$ && "$DEPLOY_PATH" != *..* ]] || { echo "::error::deployment_path is invalid"; exit 1; }
           [[ "$GIT_BRANCH" =~ ^[A-Za-z0-9._/-]+$ && "$GIT_BRANCH" != *..* ]] || { echo "::error::production_branch is invalid"; exit 1; }
           [[ "$GIT_REMOTE" =~ ^[A-Za-z0-9._/-]+$ && "$GIT_REMOTE" != *..* ]] || { echo "::error::git_remote is invalid"; exit 1; }
-          [[ "$SSH_PORT" =~ ^[0-9]+$ ]] && (( 10#$SSH_PORT >= 1 && 10#$SSH_PORT <= 65535 )) || { echo "::error::ssh_port is invalid"; exit 1; }
+          if [[ ! "$DEPLOY_SSH_PORT" =~ ^[0-9]+$ ]]; then
+            echo "::error::ssh_port is invalid"
+            exit 1
+          fi
+          if (( 10#$DEPLOY_SSH_PORT < 1 || 10#$DEPLOY_SSH_PORT > 65535 )); then
+            echo "::error::ssh_port is invalid"
+            exit 1
+          fi
           [[ "$COMPOSER_MODE" == php || "$COMPOSER_MODE" == direct ]] || { echo "::error::composer_mode must be php or direct"; exit 1; }
           [[ "$FRONTEND_MODE" == none || "$FRONTEND_MODE" == server || "$FRONTEND_MODE" == runner ]] || { echo "::error::frontend_mode must be none, server, or runner"; exit 1; }
           [[ "$FRONTEND_PRESET" == npm || "$FRONTEND_PRESET" == yarn || "$FRONTEND_PRESET" == pnpm ]] || { echo "::error::frontend_preset is invalid"; exit 1; }
@@ -268,7 +275,7 @@ jobs:
           set -euo pipefail
           ssh_opts=(
             -i "$HOME/.ssh/deploy_key"
-            -p "$SSH_PORT"
+            -p "$DEPLOY_SSH_PORT"
             -o StrictHostKeyChecking=yes
             -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
             -o IdentitiesOnly=yes
@@ -277,18 +284,17 @@ jobs:
           )
           scp_opts=(
             -i "$HOME/.ssh/deploy_key"
-            -P "$SSH_PORT"
+            -P "$DEPLOY_SSH_PORT"
             -o StrictHostKeyChecking=yes
             -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
             -o IdentitiesOnly=yes
             -o BatchMode=yes
             -o ConnectTimeout=20
           )
-          remote='.laravel-cpanel-cicd/bin'
-          ssh "${ssh_opts[@]}" "${SSH_USER}@${SSH_HOST}" "mkdir -p '${remote}/lib' && chmod 700 .laravel-cpanel-cicd '${remote}'"
-          scp "${scp_opts[@]}" cicd/scripts/*.sh "${SSH_USER}@${SSH_HOST}:${remote}/"
-          scp "${scp_opts[@]}" cicd/scripts/lib/common.sh "${SSH_USER}@${SSH_HOST}:${remote}/lib/common.sh"
-          ssh "${ssh_opts[@]}" "${SSH_USER}@${SSH_HOST}" "chmod 700 '${remote}'/*.sh '${remote}/lib' '${remote}/lib/common.sh'"
+          ssh "${ssh_opts[@]}" "${SSH_USER}@${SSH_HOST}" "mkdir -p .laravel-cpanel-cicd/bin/lib && chmod 700 .laravel-cpanel-cicd .laravel-cpanel-cicd/bin"
+          scp "${scp_opts[@]}" cicd/scripts/*.sh "${SSH_USER}@${SSH_HOST}:.laravel-cpanel-cicd/bin/"
+          scp "${scp_opts[@]}" cicd/scripts/lib/common.sh "${SSH_USER}@${SSH_HOST}:.laravel-cpanel-cicd/bin/lib/common.sh"
+          ssh "${ssh_opts[@]}" "${SSH_USER}@${SSH_HOST}" "chmod 700 .laravel-cpanel-cicd/bin/*.sh .laravel-cpanel-cicd/bin/lib .laravel-cpanel-cicd/bin/lib/common.sh"
 
       - name: Deploy on the server
         run: |
@@ -324,7 +330,7 @@ jobs:
           } > "$env_file"
           ssh_opts=(
             -i "$HOME/.ssh/deploy_key"
-            -p "$SSH_PORT"
+            -p "$DEPLOY_SSH_PORT"
             -o StrictHostKeyChecking=yes
             -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
             -o IdentitiesOnly=yes
@@ -333,7 +339,7 @@ jobs:
           )
           scp_opts=(
             -i "$HOME/.ssh/deploy_key"
-            -P "$SSH_PORT"
+            -P "$DEPLOY_SSH_PORT"
             -o StrictHostKeyChecking=yes
             -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
             -o IdentitiesOnly=yes
@@ -353,7 +359,7 @@ jobs:
         run: |
           set -euo pipefail
           rsync -az \
-            -e "ssh -i ${HOME}/.ssh/deploy_key -p ${SSH_PORT} -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${HOME}/.ssh/known_hosts -o IdentitiesOnly=yes -o BatchMode=yes" \
+            -e "ssh -i ${HOME}/.ssh/deploy_key -p ${DEPLOY_SSH_PORT} -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${HOME}/.ssh/known_hosts -o IdentitiesOnly=yes -o BatchMode=yes" \
             app/public/build/ \
             "${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH}/public/build/"
 
