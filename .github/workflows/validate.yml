@@ -1,0 +1,128 @@
+name: Validate
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Syntax, ShellCheck, and secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check Bash syntax
+        run: |
+          set -euo pipefail
+          mapfile -t files < <(find scripts -type f -name '*.sh' | sort)
+          [[ "${#files[@]}" -gt 0 ]]
+          for file in "${files[@]}"; do
+            bash -n "$file"
+            echo "bash -n ${file}"
+          done
+
+      - name: Install ShellCheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Run ShellCheck
+        run: shellcheck scripts/*.sh scripts/lib/*.sh
+
+      - name: Parse workflow and example YAML
+        run: |
+          python3 -m pip install --disable-pip-version-check pyyaml
+          python3 - <<'PY'
+          from pathlib import Path
+          import yaml
+
+          class Loader(yaml.SafeLoader):
+              pass
+
+          _bool = yaml.SafeLoader.construct_yaml_bool
+
+          def construct_bool(loader, node):
+              value = loader.construct_scalar(node)
+              if value.lower() in {"on", "off", "yes", "no"}:
+                  return value
+              return _bool(loader, node)
+
+          Loader.add_constructor("tag:yaml.org,2002:bool", construct_bool)
+
+          files = list(Path(".github/workflows").glob("*.yml"))
+          files += list(Path("examples").glob("*.yml"))
+          files += list(Path("config").glob("*.yml"))
+          required_inputs = {
+              "php_version",
+              "php_binary",
+              "production_branch",
+              "deployment_path",
+              "composer_path",
+          }
+          required_secrets = {"SSH_HOST", "SSH_USER", "SSH_PRIVATE_KEY", "SSH_KNOWN_HOSTS"}
+          for path in files:
+              data = yaml.load(path.read_text(), Loader=Loader)
+              print(f"parsed {path}")
+              if path.name == "reusable-deploy.yml":
+                  call = data["on"]["workflow_call"]
+                  missing = required_inputs - set(call["inputs"])
+                  missing_secrets = required_secrets - set(call["secrets"])
+                  if missing or missing_secrets:
+                      raise SystemExit(f"missing workflow contract: {missing} {missing_secrets}")
+                  if "workflow_dispatch" in data["on"]:
+                      raise SystemExit("manual runs belong on the caller workflow")
+          example = Path("examples/laravel-caller.yml").read_text()
+          for item in (
+              "reusable-deploy.yml@main",
+              "php_binary:",
+              "composer_path:",
+              "deployment_path:",
+              "SSH_KNOWN_HOSTS:",
+          ):
+              if item not in example:
+                  raise SystemExit(f"caller example is missing {item}")
+          print("workflow contract accepted")
+          PY
+
+      - name: Scan for private keys and live environment files
+        run: |
+          set -euo pipefail
+          if grep -RInE --exclude-dir=.git 'BEGIN (OPENSSH |RSA |EC )?PRIVATE KEY' .; then
+            echo "::error::Private key material found"
+            exit 1
+          fi
+          if find . -name '.env' -o -name '*.pem' -o -name 'id_rsa' | grep -q .; then
+            echo "::error::Secret-like file found"
+            exit 1
+          fi
+          echo "No private keys or .env files found"
+
+      - name: Check script permissions in Git
+        run: |
+          set -euo pipefail
+          git ls-files -s scripts | while read -r mode _ _ path; do
+            case "$mode" in
+              100755) echo "executable ${path}" ;;
+              *) echo "::error::${path} is not executable"; exit 1 ;;
+            esac
+          done
+
+      - name: Install actionlint
+        run: |
+          set -euo pipefail
+          version=1.7.7
+          curl -fsSL -o actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${version}/actionlint_${version}_linux_amd64.tar.gz"
+          tar -xzf actionlint.tar.gz actionlint
+          sudo mv actionlint /usr/local/bin/actionlint
+          actionlint -version
+
+      - name: Lint GitHub Actions
+        run: actionlint

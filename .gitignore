@@ -1,0 +1,14 @@
+.DS_Store
+.env
+.env.*
+*.pem
+*.key
+id_rsa
+id_ed25519
+known_hosts
+deploy.env
+*.sql
+*.sql.gz
+*.sqlite
+*.sqlite3
+backups/

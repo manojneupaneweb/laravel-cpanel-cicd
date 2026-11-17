@@ -1,0 +1,51 @@
+# Reference contract for one Laravel application.
+# The server scripts read environment variables supplied by the reusable
+# workflow. They do not read this file.
+
+deployment:
+  path: /home/account/apps/example
+  branch: main
+  remote: origin
+  environment: production
+
+php:
+  version: "8.4"
+  binary: /opt/alt/php84/usr/bin/php
+
+composer:
+  mode: php
+  path: /usr/local/bin/composer
+  flags:
+    - --no-dev
+    - --prefer-dist
+    - --no-interaction
+    - --optimize-autoloader
+
+frontend:
+  mode: none
+  preset: npm
+  script: build
+  node_version: "22"
+
+database:
+  backup: true
+  migrate: false
+
+laravel:
+  optimize: true
+  cache_routes: false
+  cache_events: false
+  restart_queues: false
+  maintenance_mode: false
+
+health:
+  url: https://example.com/up
+  from: runner
+
+ssh:
+  port: 22
+  secrets:
+    - SSH_HOST
+    - SSH_USER
+    - SSH_PRIVATE_KEY
+    - SSH_KNOWN_HOSTS

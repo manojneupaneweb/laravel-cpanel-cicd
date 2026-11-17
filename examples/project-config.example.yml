@@ -1,0 +1,27 @@
+# Per-application values copied into the caller workflow.
+# These values are examples. Replace every path, hostname, and URL.
+# Do not put passwords, private keys, or .env contents in this file.
+
+php_version: "8.4"
+php_binary: /opt/alt/php84/usr/bin/php
+composer_path: /usr/local/bin/composer
+composer_mode: php
+composer_flags: --no-dev --prefer-dist --no-interaction --optimize-autoloader
+production_branch: main
+deployment_path: /home/account/apps/example
+ssh_port: "22"
+git_remote: origin
+frontend_mode: none
+frontend_preset: npm
+npm_script: build
+node_version: "22"
+run_migrations: false
+backup_database: true
+optimize: true
+cache_routes: false
+cache_events: false
+restart_queues: false
+maintenance_mode: false
+health_check_url: https://example.com/up
+health_check_from: runner
+environment: production

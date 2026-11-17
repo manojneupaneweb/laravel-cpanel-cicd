@@ -1,0 +1,51 @@
+# Copy this file into a Laravel application as:
+# .github/workflows/deploy.yml
+#
+# It calls the reusable workflow in this template. It does not deploy by itself
+# while it remains under examples/.
+
+name: Deploy
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    uses: manojneupaneweb/laravel-cpanel-cicd/.github/workflows/reusable-deploy.yml@main
+    with:
+      php_version: "8.4"
+      php_binary: /opt/alt/php84/usr/bin/php
+      composer_path: /usr/local/bin/composer
+      composer_mode: php
+      composer_flags: --no-dev --prefer-dist --no-interaction --optimize-autoloader
+      production_branch: main
+      deployment_path: /home/account/apps/example
+      ssh_port: "22"
+      git_remote: origin
+      frontend_mode: none
+      frontend_preset: npm
+      npm_script: build
+      node_version: "22"
+      run_migrations: false
+      backup_database: true
+      optimize: true
+      cache_routes: false
+      cache_events: false
+      restart_queues: false
+      maintenance_mode: false
+      health_check_url: https://example.com/up
+      health_check_from: runner
+      environment: production
+      template_repository: manojneupaneweb/laravel-cpanel-cicd
+      scripts_ref: main
+    secrets:
+      SSH_HOST: ${{ secrets.SSH_HOST }}
+      SSH_USER: ${{ secrets.SSH_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}

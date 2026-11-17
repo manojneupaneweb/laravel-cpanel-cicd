@@ -1,0 +1,370 @@
+name: Reusable cPanel deploy
+
+on:
+  workflow_call:
+    inputs:
+      php_version:
+        description: Expected major.minor PHP version on the server, for example 8.4
+        required: true
+        type: string
+      php_binary:
+        description: Absolute PHP binary used for Composer and Artisan
+        required: true
+        type: string
+      production_branch:
+        description: Branch that is checked out on the server
+        required: true
+        type: string
+      deployment_path:
+        description: Absolute path of the Laravel application on the server
+        required: true
+        type: string
+      ssh_port:
+        description: SSH port
+        required: false
+        type: string
+        default: "22"
+      composer_path:
+        description: Absolute Composer path, or a command name when composer_mode is direct
+        required: true
+        type: string
+      composer_mode:
+        description: php runs PHP_BINARY COMPOSER_PATH; direct runs COMPOSER_PATH
+        required: false
+        type: string
+        default: php
+      composer_flags:
+        description: Space-separated allowlisted Composer flags
+        required: false
+        type: string
+        default: --no-dev --prefer-dist --no-interaction --optimize-autoloader
+      frontend_mode:
+        description: none, server, or runner
+        required: false
+        type: string
+        default: none
+      frontend_preset:
+        description: npm, yarn, or pnpm
+        required: false
+        type: string
+        default: npm
+      npm_script:
+        description: Package script used for the frontend build
+        required: false
+        type: string
+        default: build
+      node_version:
+        description: Node.js version used when frontend_mode is runner
+        required: false
+        type: string
+        default: "22"
+      run_migrations:
+        description: Run php artisan migrate --force
+        required: false
+        type: boolean
+        default: false
+      backup_database:
+        description: Back up MySQL, MariaDB, or SQLite before the release continues
+        required: false
+        type: boolean
+        default: true
+      optimize:
+        description: Cache Laravel configuration and views
+        required: false
+        type: boolean
+        default: true
+      cache_routes:
+        description: Run route:cache. Leave false when routes use closures.
+        required: false
+        type: boolean
+        default: false
+      cache_events:
+        description: Run event:cache when the installed Laravel version provides it
+        required: false
+        type: boolean
+        default: false
+      restart_queues:
+        description: Run queue:restart when this application uses queue workers
+        required: false
+        type: boolean
+        default: false
+      maintenance_mode:
+        description: Use artisan down for migrations and bring the site back up afterwards
+        required: false
+        type: boolean
+        default: false
+      health_check_url:
+        description: Public HTTPS or HTTP URL. Empty skips the URL check.
+        required: false
+        type: string
+        default: ""
+      health_check_from:
+        description: runner or server
+        required: false
+        type: string
+        default: runner
+      environment:
+        description: GitHub Actions environment name
+        required: false
+        type: string
+        default: production
+      git_remote:
+        description: Git remote used on the server
+        required: false
+        type: string
+        default: origin
+      template_repository:
+        description: Repository that contains these deployment scripts
+        required: false
+        type: string
+        default: manojneupaneweb/laravel-cpanel-cicd
+      scripts_ref:
+        description: Git ref of the deployment scripts
+        required: false
+        type: string
+        default: main
+    secrets:
+      SSH_HOST:
+        required: true
+      SSH_USER:
+        required: true
+      SSH_PRIVATE_KEY:
+        required: true
+      SSH_KNOWN_HOSTS:
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cpanel-deploy-${{ github.repository }}-${{ inputs.environment }}-${{ inputs.deployment_path }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy Laravel to cPanel
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    timeout-minutes: 30
+    env:
+      PHP_VERSION: ${{ inputs.php_version }}
+      PHP_BINARY: ${{ inputs.php_binary }}
+      GIT_BRANCH: ${{ inputs.production_branch }}
+      DEPLOY_PATH: ${{ inputs.deployment_path }}
+      SSH_PORT: ${{ inputs.ssh_port }}
+      COMPOSER_PATH: ${{ inputs.composer_path }}
+      COMPOSER_MODE: ${{ inputs.composer_mode }}
+      COMPOSER_FLAGS: ${{ inputs.composer_flags }}
+      FRONTEND_MODE: ${{ inputs.frontend_mode }}
+      FRONTEND_PRESET: ${{ inputs.frontend_preset }}
+      NPM_SCRIPT: ${{ inputs.npm_script }}
+      NODE_VERSION: ${{ inputs.node_version }}
+      RUN_MIGRATIONS: ${{ inputs.run_migrations }}
+      BACKUP_DATABASE: ${{ inputs.backup_database }}
+      OPTIMIZE: ${{ inputs.optimize }}
+      CACHE_ROUTES: ${{ inputs.cache_routes }}
+      CACHE_EVENTS: ${{ inputs.cache_events }}
+      RESTART_QUEUES: ${{ inputs.restart_queues }}
+      MAINTENANCE_MODE: ${{ inputs.maintenance_mode }}
+      HEALTH_CHECK_URL: ${{ inputs.health_check_url }}
+      HEALTH_CHECK_FROM: ${{ inputs.health_check_from }}
+      DEPLOY_ENVIRONMENT: ${{ inputs.environment }}
+      GIT_REMOTE: ${{ inputs.git_remote }}
+      TEMPLATE_REPOSITORY: ${{ inputs.template_repository }}
+      SCRIPTS_REF: ${{ inputs.scripts_ref }}
+      SSH_HOST: ${{ secrets.SSH_HOST }}
+      SSH_USER: ${{ secrets.SSH_USER }}
+      SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+      SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+    steps:
+      - name: Validate caller inputs
+        run: |
+          set -euo pipefail
+          [[ "$PHP_VERSION" =~ ^[0-9]+\.[0-9]+$ ]] || { echo "::error::php_version must be major.minor"; exit 1; }
+          [[ "$PHP_BINARY" =~ ^/[-A-Za-z0-9._/+]+$ ]] || { echo "::error::php_binary must be an absolute path"; exit 1; }
+          [[ "$DEPLOY_PATH" =~ ^/[-A-Za-z0-9._@/+]+$ && "$DEPLOY_PATH" != *..* ]] || { echo "::error::deployment_path is invalid"; exit 1; }
+          [[ "$GIT_BRANCH" =~ ^[A-Za-z0-9._/-]+$ && "$GIT_BRANCH" != *..* ]] || { echo "::error::production_branch is invalid"; exit 1; }
+          [[ "$GIT_REMOTE" =~ ^[A-Za-z0-9._/-]+$ && "$GIT_REMOTE" != *..* ]] || { echo "::error::git_remote is invalid"; exit 1; }
+          [[ "$SSH_PORT" =~ ^[0-9]+$ ]] && (( 10#$SSH_PORT >= 1 && 10#$SSH_PORT <= 65535 )) || { echo "::error::ssh_port is invalid"; exit 1; }
+          [[ "$COMPOSER_MODE" == php || "$COMPOSER_MODE" == direct ]] || { echo "::error::composer_mode must be php or direct"; exit 1; }
+          [[ "$FRONTEND_MODE" == none || "$FRONTEND_MODE" == server || "$FRONTEND_MODE" == runner ]] || { echo "::error::frontend_mode must be none, server, or runner"; exit 1; }
+          [[ "$FRONTEND_PRESET" == npm || "$FRONTEND_PRESET" == yarn || "$FRONTEND_PRESET" == pnpm ]] || { echo "::error::frontend_preset is invalid"; exit 1; }
+          [[ "$NPM_SCRIPT" =~ ^[A-Za-z0-9:_-]+$ ]] || { echo "::error::npm_script is invalid"; exit 1; }
+          [[ "$NODE_VERSION" =~ ^[0-9]+(\.[0-9]+){0,2}$ ]] || { echo "::error::node_version is invalid"; exit 1; }
+          [[ "$HEALTH_CHECK_FROM" == runner || "$HEALTH_CHECK_FROM" == server ]] || { echo "::error::health_check_from must be runner or server"; exit 1; }
+          [[ "$DEPLOY_ENVIRONMENT" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,254}$ ]] || { echo "::error::environment name is invalid"; exit 1; }
+          [[ "$TEMPLATE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || { echo "::error::template_repository is invalid"; exit 1; }
+          [[ "$SCRIPTS_REF" =~ ^[A-Za-z0-9._/-]+$ && "$SCRIPTS_REF" != *..* ]] || { echo "::error::scripts_ref is invalid"; exit 1; }
+          [[ -n "$SSH_HOST" && "$SSH_HOST" =~ ^[A-Za-z0-9.-]+$ ]] || { echo "::error::SSH_HOST is missing or invalid"; exit 1; }
+          [[ -n "$SSH_USER" && "$SSH_USER" =~ ^[A-Za-z0-9._-]+$ ]] || { echo "::error::SSH_USER is missing or invalid"; exit 1; }
+          [[ -n "$SSH_PRIVATE_KEY" && -n "$SSH_KNOWN_HOSTS" ]] || { echo "::error::SSH key and known_hosts are required"; exit 1; }
+          if [[ -n "$HEALTH_CHECK_URL" && ! "$HEALTH_CHECK_URL" =~ ^https?://[^[:space:]]+$ ]]; then
+            echo "::error::health_check_url must be an http or https URL"
+            exit 1
+          fi
+          echo "Inputs accepted for ${GIT_BRANCH} at ${DEPLOY_PATH}"
+
+      - name: Checkout deployment scripts
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ inputs.template_repository }}
+          ref: ${{ inputs.scripts_ref }}
+          persist-credentials: false
+          path: cicd
+
+      - name: Checkout application for frontend build
+        if: inputs.frontend_mode == 'runner'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: app
+
+      - name: Set up Node.js
+        if: inputs.frontend_mode == 'runner'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ inputs.node_version }}
+
+      - name: Build frontend assets on the runner
+        if: inputs.frontend_mode == 'runner'
+        working-directory: app
+        run: |
+          set -euo pipefail
+          case "$FRONTEND_PRESET" in
+            npm)
+              npm ci
+              npm run "$NPM_SCRIPT"
+              ;;
+            yarn)
+              yarn install --frozen-lockfile
+              yarn run "$NPM_SCRIPT"
+              ;;
+            pnpm)
+              corepack enable
+              pnpm install --frozen-lockfile
+              pnpm run "$NPM_SCRIPT"
+              ;;
+          esac
+          [[ -d public/build ]] || { echo "::error::public/build was not created"; exit 1; }
+
+      - name: Configure SSH
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+          if ! grep -Eq '^[^#[:space:]]' ~/.ssh/known_hosts; then
+            echo "::error::SSH_KNOWN_HOSTS does not contain a host key"
+            exit 1
+          fi
+          ssh-keygen -lf ~/.ssh/deploy_key
+          echo "Host key verification is required. StrictHostKeyChecking remains yes."
+
+      - name: Upload deployment scripts
+        run: |
+          set -euo pipefail
+          ssh_opts=(
+            -i "$HOME/.ssh/deploy_key"
+            -p "$SSH_PORT"
+            -o StrictHostKeyChecking=yes
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
+            -o IdentitiesOnly=yes
+            -o BatchMode=yes
+            -o ConnectTimeout=20
+          )
+          scp_opts=(
+            -i "$HOME/.ssh/deploy_key"
+            -P "$SSH_PORT"
+            -o StrictHostKeyChecking=yes
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
+            -o IdentitiesOnly=yes
+            -o BatchMode=yes
+            -o ConnectTimeout=20
+          )
+          remote='.laravel-cpanel-cicd/bin'
+          ssh "${ssh_opts[@]}" "${SSH_USER}@${SSH_HOST}" "mkdir -p '${remote}/lib' && chmod 700 .laravel-cpanel-cicd '${remote}'"
+          scp "${scp_opts[@]}" cicd/scripts/*.sh "${SSH_USER}@${SSH_HOST}:${remote}/"
+          scp "${scp_opts[@]}" cicd/scripts/lib/common.sh "${SSH_USER}@${SSH_HOST}:${remote}/lib/common.sh"
+          ssh "${ssh_opts[@]}" "${SSH_USER}@${SSH_HOST}" "chmod 700 '${remote}'/*.sh '${remote}/lib' '${remote}/lib/common.sh'"
+
+      - name: Deploy on the server
+        run: |
+          set -euo pipefail
+          build_frontend=false
+          if [[ "$FRONTEND_MODE" == server ]]; then
+            build_frontend=true
+          fi
+          umask 077
+          env_file="$(mktemp)"
+          trap 'rm -f "$env_file"' EXIT
+          {
+            printf 'DEPLOY_PATH=%q\n' "$DEPLOY_PATH"
+            printf 'GIT_BRANCH=%q\n' "$GIT_BRANCH"
+            printf 'GIT_REMOTE=%q\n' "$GIT_REMOTE"
+            printf 'PHP_BINARY=%q\n' "$PHP_BINARY"
+            printf 'PHP_VERSION=%q\n' "$PHP_VERSION"
+            printf 'COMPOSER_PATH=%q\n' "$COMPOSER_PATH"
+            printf 'COMPOSER_MODE=%q\n' "$COMPOSER_MODE"
+            printf 'COMPOSER_FLAGS=%q\n' "$COMPOSER_FLAGS"
+            printf 'BUILD_FRONTEND=%q\n' "$build_frontend"
+            printf 'FRONTEND_PRESET=%q\n' "$FRONTEND_PRESET"
+            printf 'NPM_SCRIPT=%q\n' "$NPM_SCRIPT"
+            printf 'RUN_MIGRATIONS=%q\n' "$RUN_MIGRATIONS"
+            printf 'BACKUP_DATABASE=%q\n' "$BACKUP_DATABASE"
+            printf 'OPTIMIZE=%q\n' "$OPTIMIZE"
+            printf 'CACHE_ROUTES=%q\n' "$CACHE_ROUTES"
+            printf 'CACHE_EVENTS=%q\n' "$CACHE_EVENTS"
+            printf 'RESTART_QUEUES=%q\n' "$RESTART_QUEUES"
+            printf 'MAINTENANCE_MODE=%q\n' "$MAINTENANCE_MODE"
+            printf 'HEALTH_CHECK_URL=%q\n' "$HEALTH_CHECK_URL"
+            printf 'HEALTH_CHECK_FROM=%q\n' "$HEALTH_CHECK_FROM"
+          } > "$env_file"
+          ssh_opts=(
+            -i "$HOME/.ssh/deploy_key"
+            -p "$SSH_PORT"
+            -o StrictHostKeyChecking=yes
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
+            -o IdentitiesOnly=yes
+            -o BatchMode=yes
+            -o ConnectTimeout=20
+          )
+          scp_opts=(
+            -i "$HOME/.ssh/deploy_key"
+            -P "$SSH_PORT"
+            -o StrictHostKeyChecking=yes
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts"
+            -o IdentitiesOnly=yes
+            -o BatchMode=yes
+            -o ConnectTimeout=20
+          )
+          scp "${scp_opts[@]}" "$env_file" "${SSH_USER}@${SSH_HOST}:.laravel-cpanel-cicd/bin/deploy.env"
+          set +e
+          ssh "${ssh_opts[@]}" "${SSH_USER}@${SSH_HOST}" "chmod 600 .laravel-cpanel-cicd/bin/deploy.env && set -a && source .laravel-cpanel-cicd/bin/deploy.env && set +a && bash .laravel-cpanel-cicd/bin/deploy.sh"
+          status=$?
+          set -e
+          ssh "${ssh_opts[@]}" "${SSH_USER}@${SSH_HOST}" "rm -f .laravel-cpanel-cicd/bin/deploy.env"
+          exit "$status"
+
+      - name: Upload runner-built assets
+        if: inputs.frontend_mode == 'runner'
+        run: |
+          set -euo pipefail
+          rsync -az \
+            -e "ssh -i ${HOME}/.ssh/deploy_key -p ${SSH_PORT} -o StrictHostKeyChecking=yes -o UserKnownHostsFile=${HOME}/.ssh/known_hosts -o IdentitiesOnly=yes -o BatchMode=yes" \
+            app/public/build/ \
+            "${SSH_USER}@${SSH_HOST}:${DEPLOY_PATH}/public/build/"
+
+      - name: Health check from runner
+        if: inputs.health_check_url != '' && inputs.health_check_from != 'server'
+        run: |
+          set -euo pipefail
+          code="$(curl -fsS --retry 3 --retry-delay 2 --max-time 20 -o /dev/null -w '%{http_code}' "$HEALTH_CHECK_URL")"
+          echo "Health check returned HTTP ${code}"
+
+      - name: Report deployment failure
+        if: failure()
+        run: |
+          echo "::error::Deployment failed for ${GITHUB_REPOSITORY} branch ${GIT_BRANCH}. No database backup was restored and .env was not changed. Review the preceding step and docs/ROLLBACK.md."
