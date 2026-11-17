@@ -259,7 +259,12 @@ jobs:
           set -euo pipefail
           umask 077
           mkdir -p ~/.ssh
-          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          printf '%s\n' "$SSH_PRIVATE_KEY" | awk '
+            { sub(/\r$/, "") }
+            !started && $0 ~ /^[[:space:]]*$/ { next }
+            !started { sub(/^[[:space:]]+/, ""); started = 1 }
+            { print }
+          ' > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
           printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
           chmod 644 ~/.ssh/known_hosts
@@ -267,7 +272,7 @@ jobs:
             echo "::error::SSH_KNOWN_HOSTS does not contain a host key"
             exit 1
           fi
-          ssh-keygen -lf ~/.ssh/deploy_key
+          ssh-keygen -y -f ~/.ssh/deploy_key >/dev/null
           echo "Host key verification is required. StrictHostKeyChecking remains yes."
 
       - name: Upload deployment scripts
